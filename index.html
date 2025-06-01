@@ -4,12 +4,20 @@
     <meta charset="UTF-8" />
     <title>Карта метро</title>
     <style>
+        #map-container {
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            position: relative;
+        }
         #map {
             position: relative;
             width: 5000px;
             height: 5000px;
             border: 1px solid #000;
             background: #f9f9f9;
+            transform-origin: 0 0;
+            cursor: grab;
         }
         .station-wrapper {
             position: absolute;
@@ -46,48 +54,59 @@
 </head>
 <body>
 
-<div id="map"></div>
+<div id="map-container">
+    <div id="map"></div>
+</div>
+
 
 <script>
+    let selectedFrom = null;
+    let selectedTo = null;
+    let stationsById = {};
+    let svgLines = [];
+
     async function loadMap() {
         const response = await fetch('api.php');
         const data = await response.json();
 
         const map = document.getElementById('map');
 
-        // Создаём SVG для линий
+        // SVG для линий
         const svgNS = "http://www.w3.org/2000/svg";
         const svg = document.createElementNS(svgNS, 'svg');
         svg.setAttribute('width', map.clientWidth);
         svg.setAttribute('height', map.clientHeight);
         map.appendChild(svg);
 
-        const stationsById = {};
-
-        // Создаём станции с названиями
+        // Создание станций
         data.stations.forEach(station => {
-            const stationWrapper = document.createElement('div');
-            stationWrapper.classList.add('station-wrapper');
-            stationWrapper.style.left = station.x + 'px';
-            stationWrapper.style.top = station.y + 'px';
+            const wrapper = document.createElement('div');
+            wrapper.classList.add('station-wrapper');
+            wrapper.style.left = station.x + 'px';
+            wrapper.style.top = station.y + 'px';
 
-            const div = document.createElement('div');
-            div.classList.add('station');
-            div.title = station.name;
+            const circle = document.createElement('div');
+            circle.classList.add('station');
+            circle.title = station.name;
+
+            // Цвет станции
+            const stationColor = station.line || '#999'; // серый по умолчанию
+            circle.style.backgroundColor = stationColor;
 
             const label = document.createElement('div');
             label.classList.add('station-label');
             label.textContent = station.name;
 
-            stationWrapper.appendChild(div);
-            stationWrapper.appendChild(label);
-            map.appendChild(stationWrapper);
+            wrapper.appendChild(circle);
+            wrapper.appendChild(label);
+            map.appendChild(wrapper);
 
-            stationsById[station.id] = station;
-            station.element = div;
+            stationsById[station.id] = { ...station, element: circle };
+
+            circle.addEventListener('click', () => handleClickStation(station.id));
         });
 
-        // Рисуем линии между станциями
+        // Рисуем линии
         data.connections.forEach(conn => {
             const s1 = stationsById[conn.station_id1];
             const s2 = stationsById[conn.station_id2];
@@ -98,14 +117,164 @@
             line.setAttribute('y1', s1.y);
             line.setAttribute('x2', s2.x);
             line.setAttribute('y2', s2.y);
-            line.setAttribute('stroke', '#FF4500');  // оранжево-красный цвет линии
+
+            // Цвет линии — берём цвет первой станции
+            line.setAttribute('stroke', s1.line || '#999');
             line.setAttribute('stroke-width', 4);
             svg.appendChild(line);
         });
+
+        // Кнопка построения маршрута
+        const button = document.createElement('button');
+        button.textContent = 'Построить маршрут';
+        button.style.position = 'fixed';
+        button.style.top = '20px';
+        button.style.right = '20px';
+        button.style.zIndex = '1000';
+        button.style.padding = '10px';
+        button.addEventListener('click', buildRoute);
+        document.body.appendChild(button);
+
+        // Кнопка сброса
+        const resetBtn = document.createElement('button');
+        resetBtn.textContent = 'Сбросить маршрут';
+        resetBtn.style.position = 'fixed';
+        resetBtn.style.top = '60px';
+        resetBtn.style.right = '20px';
+        resetBtn.style.zIndex = '1000';
+        resetBtn.style.padding = '10px';
+        resetBtn.addEventListener('click', resetSelection);
+        document.body.appendChild(resetBtn);
+    }
+
+
+    function handleClickStation(id) {
+        const station = stationsById[id];
+        if (!selectedFrom) {
+            selectedFrom = id;
+            station.element.style.background = 'blue';
+        } else if (!selectedTo && id !== selectedFrom) {
+            selectedTo = id;
+            station.element.style.background = 'green';
+        } else {
+            // Сброс
+            resetSelection();
+            handleClickStation(id);
+        }
+    }
+
+    function resetSelection() {
+        if (selectedFrom) stationsById[selectedFrom].element.style.background = 'red';
+        if (selectedTo) stationsById[selectedTo].element.style.background = 'red';
+        selectedFrom = null;
+        selectedTo = null;
+
+        svgLines.forEach(line => line.remove());
+        svgLines = [];
+
+        const oldResult = document.getElementById('route-info');
+        if (oldResult) oldResult.remove();
+    }
+
+    async function buildRoute() {
+        if (!selectedFrom || !selectedTo) {
+            alert('Выберите две разные станции.');
+            return;
+        }
+
+        const res = await fetch(`route.php?from=${selectedFrom}&to=${selectedTo}`);
+        const data = await res.json();
+
+        if (data.error) {
+            alert(data.error);
+            return;
+        }
+
+        highlightRoute(data.route);
+        showRouteInfo(data);
+    }
+
+    function highlightRoute(route) {
+        const svg = document.querySelector('svg');
+
+        for (let i = 0; i < route.length - 1; i++) {
+            const s1 = stationsById[route[i].id];
+            const s2 = stationsById[route[i + 1].id];
+
+            const line = document.createElementNS(svg.namespaceURI, 'line');
+            line.setAttribute('x1', s1.x);
+            line.setAttribute('y1', s1.y);
+            line.setAttribute('x2', s2.x);
+            line.setAttribute('y2', s2.y);
+            line.setAttribute('stroke', 'blue');
+            line.setAttribute('stroke-width', 6);
+            svg.appendChild(line);
+            svgLines.push(line);
+        }
+    }
+
+    function showRouteInfo(data) {
+        const map = document.getElementById('map');
+        let result = document.getElementById('route-info');
+        if (result) result.remove();
+
+        result = document.createElement('div');
+        result.id = 'route-info';
+        result.style.position = 'fixed';
+        result.style.bottom = '20px';
+        result.style.left = '20px';
+        result.style.background = 'white';
+        result.style.padding = '10px';
+        result.style.border = '1px solid #ccc';
+        result.style.boxShadow = '0 0 5px rgba(0,0,0,0.2)';
+        result.innerHTML = `
+            <strong>Маршрут:</strong><br>
+            ${data.route.map(s => s.name).join(' → ')}<br>
+            ⏱ Общее время: <strong>${data.total_time} мин</strong>
+        `;
+        document.body.appendChild(result);
     }
 
     loadMap();
+    let scale = 1;
+    let posX = 0;
+    let posY = 0;
+    let isDragging = false;
+    let startX, startY;
+
+    const map = document.getElementById('map');
+    const container = document.getElementById('map-container');
+
+    // Масштабирование колесиком
+    container.addEventListener('wheel', e => {
+        e.preventDefault();
+        const delta = e.deltaY < 0 ? 1.1 : 0.9;
+        scale *= delta;
+        map.style.transform = `translate(${posX}px, ${posY}px) scale(${scale})`;
+    });
+
+    // Перетаскивание карты мышкой
+    map.addEventListener('mousedown', e => {
+        isDragging = true;
+        startX = e.clientX - posX;
+        startY = e.clientY - posY;
+        map.style.cursor = 'grabbing';
+    });
+
+    container.addEventListener('mousemove', e => {
+        if (!isDragging) return;
+        posX = e.clientX - startX;
+        posY = e.clientY - startY;
+        map.style.transform = `translate(${posX}px, ${posY}px) scale(${scale})`;
+    });
+
+    document.addEventListener('mouseup', () => {
+        isDragging = false;
+        map.style.cursor = 'grab';
+    });
+
 </script>
+
 
 </body>
 </html>

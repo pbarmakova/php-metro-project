@@ -5,7 +5,7 @@ $pdo = getPDO();
 
 try {
     // Получаем станции
-    $stations = $pdo->query("SELECT id, name, x, y FROM stations")->fetchAll();
+    $stations = $pdo->query("SELECT id, name, line, x, y FROM stations")->fetchAll();
 
     // Получаем соединения
     $connections = $pdo->query("SELECT station_id1, station_id2 FROM connections")->fetchAll();
