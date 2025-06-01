@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8" />
+    <title>Карта метро</title>
+    <style>
+        #map {
+            position: relative;
+            width: 5000px;
+            height: 5000px;
+            border: 1px solid #000;
+            background: #f9f9f9;
+        }
+        .station-wrapper {
+            position: absolute;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            pointer-events: auto; /* чтобы можно было кликать */
+        }
+        .station {
+            width: 20px;
+            height: 20px;
+            background: red;
+            border-radius: 50%;
+            margin: 0 auto;
+            cursor: pointer;
+            border: 2px solid white;
+            box-shadow: 0 0 5px rgba(0,0,0,0.3);
+        }
+        .station-label {
+            position: absolute;
+            font-size: 12px;
+            color: black;
+            transform: translate(30px, -50%); /* сдвиг вправо и центрирование по вертикали */
+            white-space: nowrap;
+            z-index: 1;
+            pointer-events: none;
+        }
+        svg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<script>
+    async function loadMap() {
+        const response = await fetch('api.php');
+        const data = await response.json();
+
+        const map = document.getElementById('map');
+
+        // Создаём SVG для линий
+        const svgNS = "http://www.w3.org/2000/svg";
+        const svg = document.createElementNS(svgNS, 'svg');
+        svg.setAttribute('width', map.clientWidth);
+        svg.setAttribute('height', map.clientHeight);
+        map.appendChild(svg);
+
+        const stationsById = {};
+
+        // Создаём станции с названиями
+        data.stations.forEach(station => {
+            const stationWrapper = document.createElement('div');
+            stationWrapper.classList.add('station-wrapper');
+            stationWrapper.style.left = station.x + 'px';
+            stationWrapper.style.top = station.y + 'px';
+
+            const div = document.createElement('div');
+            div.classList.add('station');
+            div.title = station.name;
+
+            const label = document.createElement('div');
+            label.classList.add('station-label');
+            label.textContent = station.name;
+
+            stationWrapper.appendChild(div);
+            stationWrapper.appendChild(label);
+            map.appendChild(stationWrapper);
+
+            stationsById[station.id] = station;
+            station.element = div;
+        });
+
+        // Рисуем линии между станциями
+        data.connections.forEach(conn => {
+            const s1 = stationsById[conn.station_id1];
+            const s2 = stationsById[conn.station_id2];
+            if (!s1 || !s2) return;
+
+            const line = document.createElementNS(svgNS, 'line');
+            line.setAttribute('x1', s1.x);
+            line.setAttribute('y1', s1.y);
+            line.setAttribute('x2', s2.x);
+            line.setAttribute('y2', s2.y);
+            line.setAttribute('stroke', '#FF4500');  // оранжево-красный цвет линии
+            line.setAttribute('stroke-width', 4);
+            svg.appendChild(line);
+        });
+    }
+
+    loadMap();
+</script>
+
+</body>
+</html>
