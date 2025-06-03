@@ -1,0 +1,24 @@
+# macOS системные файлы
+.DS_Store
+
+# Бэкап-файлы редакторов
+*.swp
+*.swo
+*.bak
+*.tmp
+
+# PhpStorm/VSCode и IDE
+.idea/
+.vscode/
+
+# Файлы логов и кэша
+*.log
+*.cache
+*.lock
+
+# Composer (если будет)
+vendor/
+composer.lock
+
+# Настройки окружения (если будут)
+.env

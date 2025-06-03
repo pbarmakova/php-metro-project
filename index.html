@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8" />
+    <title>Карта метро</title>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+        #map-container {
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            position: relative;
+            background: #f9f9f9;
+        }
+        #map {
+            position: absolute;
+            width: 2000px;
+            height: 2000px;
+            background: #f9f9f9;
+            transform-origin: top left;
+            cursor: grab;
+        }
+        .station-wrapper {
+            position: absolute;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            pointer-events: auto;
+            z-index: 10; /* станции всегда сверху */
+        }
+        .station {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            margin: 0 auto;
+            cursor: pointer;
+            border: 2px solid white;
+            box-shadow: 0 0 5px rgba(0,0,0,0.3);
+        }
+        .station-label {
+            position: absolute;
+            font-size: 12px;
+            color: black;
+            white-space: nowrap;
+            z-index: 1;
+            pointer-events: none;
+        }
+        .blur-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(255, 255, 255, 0.5);
+            pointer-events: none;
+            z-index: 15;
+            display: none;
+        }
+        svg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+<div id="map-container">
+    <div id="map">
+        <div id="blur-overlay" class="blur-overlay"></div>
+    </div>
+</div>
+
+<script>
+    let selectedFrom = null;
+    let selectedTo = null;
+    let stationsById = {};
+    let svgLines = [];
+
+    async function loadMap() {
+        const response = await fetch('api.php');
+        const data = await response.json();
+
+        const map = document.getElementById('map');
+
+        const svgNS = "http://www.w3.org/2000/svg";
+
+        // SVG для фона (линии метро)
+        const baseSvg = document.createElementNS(svgNS, 'svg');
+        baseSvg.setAttribute('width', map.clientWidth);
+        baseSvg.setAttribute('height', map.clientHeight);
+        baseSvg.style.position = 'absolute';
+        baseSvg.style.zIndex = '1';  // Фоновые линии — самый низ
+        baseSvg.id = 'base-svg';
+        map.appendChild(baseSvg);
+
+        // SVG для маршрута (выделенная линия)
+        const routeSvg = document.createElementNS(svgNS, 'svg');
+        routeSvg.setAttribute('width', map.clientWidth);
+        routeSvg.setAttribute('height', map.clientHeight);
+        routeSvg.style.position = 'absolute';
+        routeSvg.style.zIndex = '20';  // Маршрут ниже станций, но выше фона
+        routeSvg.id = 'route-svg';
+        map.appendChild(routeSvg);
+
+        // Станции
+        data.stations.forEach(station => {
+            const wrapper = document.createElement('div');
+            wrapper.classList.add('station-wrapper');
+            wrapper.style.left = station.x + 'px';
+            wrapper.style.top = station.y + 'px';
+            wrapper.style.position = 'absolute';
+            wrapper.style.zIndex = '10'; // Станции поверх линий
+
+            const circle = document.createElement('div');
+            circle.classList.add('station');
+            circle.title = station.name;
+            circle.style.backgroundColor = station.line || '#999';
+
+            const label = document.createElement('div');
+            label.classList.add('station-label');
+            label.textContent = station.name;
+
+            const offsetX = station.label_offset_x != null ? station.label_offset_x : 30;
+            const offsetY = station.label_offset_y != null ? station.label_offset_y : -20;
+            label.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
+
+            wrapper.appendChild(circle);
+            wrapper.appendChild(label);
+            map.appendChild(wrapper);
+
+            stationsById[station.id] = { ...station, element: circle };
+
+            circle.addEventListener('click', () => handleClickStation(station.id));
+        });
+
+        // Соединения (фоновые линии)
+        data.connections.forEach(conn => {
+            const s1 = stationsById[conn.station_id1];
+            const s2 = stationsById[conn.station_id2];
+            if (!s1 || !s2) return;
+
+            const line = document.createElementNS(svgNS, 'line');
+            line.setAttribute('x1', s1.x);
+            line.setAttribute('y1', s1.y);
+            line.setAttribute('x2', s2.x);
+            line.setAttribute('y2', s2.y);
+            line.setAttribute('stroke', s1.line || '#999');
+            line.setAttribute('stroke-width', 4);
+            baseSvg.appendChild(line);
+        });
+
+        addButtons();
+        autoFitMap();
+    }
+
+    function handleClickStation(id) {
+        const station = stationsById[id];
+        if (!selectedFrom) {
+            selectedFrom = id;
+            station.element.style.background = 'black';
+        } else if (!selectedTo && id !== selectedFrom) {
+            selectedTo = id;
+            station.element.style.background = 'black';
+        } else {
+            resetSelection();
+            handleClickStation(id);
+        }
+    }
+
+    function resetSelection() {
+        // Вернуть цвет выбранных станций, если они есть
+        if (selectedFrom && stationsById[selectedFrom]) {
+            stationsById[selectedFrom].element.style.background = stationsById[selectedFrom].line || '#999';
+        }
+        if (selectedTo && stationsById[selectedTo]) {
+            stationsById[selectedTo].element.style.background = stationsById[selectedTo].line || '#999';
+        }
+
+        selectedFrom = null;
+        selectedTo = null;
+
+        const svg = document.getElementById('route-svg');
+        svg.innerHTML = '';
+        svgLines = [];
+
+        const oldResult = document.getElementById('route-info');
+        if (oldResult) oldResult.remove();
+
+        // Сброс z-index станций
+        Object.values(stationsById).forEach(station => {
+            station.element.style.zIndex = '';
+            station.element.parentElement.style.zIndex = '10';  // Чтобы станции всегда сверху
+            // И на всякий случай вернуть цвет станций, если где-то не сбросился
+            station.element.style.background = station.line || '#999';
+        });
+
+        const blurOverlay = document.getElementById('blur-overlay');
+        if (blurOverlay) blurOverlay.style.display = 'none';
+    }
+
+
+    async function buildRoute() {
+        if (!selectedFrom || !selectedTo) {
+            alert('Выберите две разные станции.');
+            return;
+        }
+
+        const res = await fetch(`route.php?from=${selectedFrom}&to=${selectedTo}`);
+        const data = await res.json();
+
+        if (data.error) {
+            alert(data.error);
+            return;
+        }
+
+        highlightRoute(data.route);
+        showRouteInfo(data);
+    }
+
+    function highlightRoute(route) {
+        const svg = document.getElementById('route-svg');
+        svg.innerHTML = ''; // Очистка старых маршрутов
+
+        const blurOverlay = document.getElementById('blur-overlay');
+        blurOverlay.style.display = 'block';
+
+        for (let i = 0; i < route.length - 1; i++) {
+            const s1 = stationsById[route[i].id];
+            const s2 = stationsById[route[i + 1].id];
+
+            const line = document.createElementNS(svg.namespaceURI, 'line');
+            line.setAttribute('x1', s1.x);
+            line.setAttribute('y1', s1.y);
+            line.setAttribute('x2', s2.x);
+            line.setAttribute('y2', s2.y);
+            line.setAttribute('stroke', s1.line);
+            line.setAttribute('stroke-width', 8);
+            line.setAttribute('stroke-linecap', 'round');
+            svg.appendChild(line);
+            svgLines.push(line);
+        }
+
+        // Поднять станции маршрута выше всех
+        route.forEach(s => {
+            stationsById[s.id].element.style.zIndex = '20';
+            stationsById[s.id].element.parentElement.style.zIndex = '20';
+            stationsById[s.id].element.style.background = 'black'; // выделить цветом
+        });
+    }
+
+    function showRouteInfo(data) {
+        let result = document.getElementById('route-info');
+        if (result) result.remove();
+
+        result = document.createElement('div');
+        result.id = 'route-info';
+        result.style.position = 'fixed';
+        result.style.bottom = '20px';
+        result.style.left = '20px';
+        result.style.background = 'white';
+        result.style.padding = '10px';
+        result.style.border = '1px solid #ccc';
+        result.style.boxShadow = '0 0 5px rgba(0,0,0,0.2)';
+        result.innerHTML = `
+          <strong>Маршрут:</strong><br>
+          ${data.route.map(s => s.name).join(' → ')}<br>
+          ⏱ Общее время: <strong>${data.total_time} мин</strong>
+        `;
+        document.body.appendChild(result);
+    }
+
+    function addButtons() {
+        const button = document.createElement('button');
+        button.textContent = 'Построить маршрут';
+        Object.assign(button.style, {
+            position: 'fixed',
+            top: '20px',
+            right: '20px',
+            zIndex: '1000',
+            padding: '10px'
+        });
+        button.addEventListener('click', buildRoute);
+        document.body.appendChild(button);
+
+        const resetBtn = document.createElement('button');
+        resetBtn.textContent = 'Сбросить маршрут';
+        Object.assign(resetBtn.style, {
+            position: 'fixed',
+            top: '60px',
+            right: '20px',
+            zIndex: '1000',
+            padding: '10px'
+        });
+        resetBtn.addEventListener('click', resetSelection);
+        document.body.appendChild(resetBtn);
+    }
+
+    // Масштаб и перетаскивание
+    let scale = 1;
+    let posX = 0;
+    let posY = 0;
+    let isDragging = false;
+    let startX, startY;
+
+    const map = document.getElementById('map');
+    const container = document.getElementById('map-container');
+
+    container.addEventListener('wheel', e => {
+        e.preventDefault();
+        const delta = e.deltaY < 0 ? 1.1 : 0.9;
+        const newScale = scale * delta;
+        scale = Math.min(Math.max(newScale, minScale), 4);
+        map.style.transform = `translate(${posX}px, ${posY}px) scale(${scale})`;
+    });
+
+    map.addEventListener('mousedown', e => {
+        isDragging = true;
+        startX = e.clientX - posX;
+        startY = e.clientY - posY;
+        map.style.cursor = 'grabbing';
+    });
+
+    container.addEventListener('mousemove', e => {
+        if (!isDragging) return;
+        posX = e.clientX - startX;
+        posY = e.clientY - startY;
+        map.style.transform = `translate(${posX}px, ${posY}px) scale(${scale})`;
+    });
+
+    document.addEventListener('mouseup', () => {
+        isDragging = false;
+        map.style.cursor = 'grab';
+    });
+
+    let minScale = 1;
+
+    function autoFitMap() {
+        const mapWidth = 2000;
+        const mapHeight = 2000;
+        const containerWidth = container.clientWidth;
+        const containerHeight = container.clientHeight;
+
+        const scaleX = containerWidth / mapWidth;
+        const scaleY = containerHeight / mapHeight;
+
+        scale = minScale = Math.min(scaleX, scaleY);
+        posX = (containerWidth - mapWidth * scale) / 2;
+        posY = (containerHeight - mapHeight * scale) / 2;
+
+        map.style.transform = `translate(${posX}px, ${posY}px) scale(${scale})`;
+    }
+
+    loadMap();
+</script>
+</body>
+</html>
